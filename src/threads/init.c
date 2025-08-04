@@ -76,7 +76,7 @@ int main (void) NO_RETURN;
 int
 main (void)
 {
-  char **argv;
+  volatile char **argv;
 
   /* Clear BSS. */  
   bss_init ();
@@ -285,7 +285,15 @@ run_task (char **argv)
   
   printf ("Executing '%s':\n", task);
 #ifdef USERPROG
-  process_wait (process_execute (task));
+  //process_wait (process_execute (task));
+  //printf("[DBG run_task] before exec\n");
+  tid_t pid = process_execute (task);
+  //printf("[DBG run_task] exec returned pid=%d\n", pid);
+
+  //printf("[DBG run_task] before wait\n");
+  process_wait (pid);
+  //printf("[DBG run_task] after wait\n");
+  
 #else
   run_test (task);
 #endif

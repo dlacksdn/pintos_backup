@@ -148,14 +148,26 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
 
+  if (!user) 
+    {
+      /* 커널 모드 페이지 폴트: 시스템콜 실패로 처리 */
+      f->eax = (uint32_t) -1;
+      /* f->eip는 그대로 두면, intr_exit()에서 syscall 복귀 주소로 돌아갑니다. */
+      return;
+    }
+
+   // 사용자 모드 페이지 폴트: 프로세스 강제 종료 
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to
      which fault_addr refers. */
-  printf ("Page fault at %p: %s error %s page in %s context.\n",
-          fault_addr,
-          not_present ? "not present" : "rights violation",
-          write ? "writing" : "reading",
-          user ? "user" : "kernel");
-  kill (f);
+//   printf ("Page fault at %p: %s error %s page in %s context.\n",
+//           fault_addr,
+//           not_present ? "not present" : "rights violation",
+//           write ? "writing" : "reading",
+//           user ? "user" : "kernel");
+//   kill (f); 
+
+  syscall_exit(NULL, (int[]){1, -1});
+  NOT_REACHED ();
 }
 

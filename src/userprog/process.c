@@ -17,6 +17,9 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include <stddef.h>             /* offsetof를 위해 필요할 수 있음 */
+#include "lib/kernel/list.h"   /* child_elem을 위한 list_entry 매크로 */
+
 
 #define MAX_ARGS 128 // new
 #define FDCOUNT_LIMIT 128 // new
@@ -63,6 +66,43 @@ process_execute (const char *cmd_line)
   tid = thread_create (thread_name, PRI_DEFAULT, // "echo" "31" "start_process" "echo foo bar"
                        start_process, fn_copy);
 
+
+   /* 3-1) thread_create 실패 처리 -------------------------------------*/
+  if (tid == TID_ERROR)
+    {
+      palloc_free_page (fn_copy);
+      palloc_free_page (thread_name);
+      return TID_ERROR;
+    }
+
+  struct thread *child = get_thread_by_tid(tid); // echo
+
+  child->parent = thread_current (); // main
+  list_push_back (&thread_current ()->children,
+                  &child->child_elem);
+
+  /* 3-4) 자식 load() 완료 신호 대기 */
+  //printf("[DEBUG] process_execute: before sema_down (waiting for load)\n");
+  sema_down(&child->load_sema);
+  //printf("[DEBUG] process_execute -> after sema_down (&child->wait_sema);\n");
+
+  /* 3-2) 부모–자식 관계 설정을 위해 all_list에서 방금 생성된 child 찾기 */
+  
+  ASSERT(child != NULL);
+
+  /* 3-3) parent 필드 설정 및 children 리스트에 링크 */
+
+  if (!child->load_success)
+    {
+      /* load 실패 시 fn_copy 해제 후 에러 반환 */
+      // palloc_free_page (fn_copy);
+      palloc_free_page (thread_name);
+      return TID_ERROR;
+    }
+
+  // -----------------------------------------------------------------
+
+
   /* 4) We no longer need the standalone name page. */
   palloc_free_page (thread_name);
 
@@ -70,6 +110,7 @@ process_execute (const char *cmd_line)
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy);
 
+  //printf("[DBG process_execute] about to return tid=%d\n", tid);
   return tid;
 }
 
@@ -82,12 +123,12 @@ start_process (void *file_name_) // file_name_ = "echo foo bar" 의 주소값
 {
   char *file_name = file_name_;
   struct intr_frame if_;
-  bool success;
+  volatile bool success;
 
   /* --- 1) Initialize interrupt frame --- */
   memset (&if_, 0, sizeof if_); // intr_frame의 모든 필드 if_가 0으로 설정된 후 필요한 필드만 명시적으로 초기화합니다
-  if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG; // User data selector
-  if_.cs = SEL_UCSEG; // User code selector.
+  if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG; // 인터럽트가 user_mode에서 발생했다
+  if_.cs = SEL_UCSEG; // interrupt가 user_mode에서 발생했다 
   if_.eflags = FLAG_IF | FLAG_MBS;
 
   /* --- 2) Tokenize the command line in-place --- */
@@ -104,10 +145,21 @@ start_process (void *file_name_) // file_name_ = "echo foo bar" 의 주소값
 
   /* --- 3) Load the executable using argv[0] as program name --- */
   success = load (argv[0], &if_.eip, &if_.esp);
+  //printf("[DEBUG] start_process: before sema_up (load_success=%d)\n", success);
+
+  /* 3-1) load 결과를 부모에게 알림 */
+  volatile struct thread *cur = thread_current (); // echo
+  cur->load_success = success;
+  sema_up(&cur->load_sema);
+  //printf("[DEBUG] start_process -> after sema_up (&thread_current ()->wait_sema);\n");
+
   if (!success) 
     {
+      list_remove(&thread_current()->child_elem);
       palloc_free_page (file_name);
-      thread_exit ();
+      //sema_up(&child->can_destroy);
+      syscall_exit(NULL, (int[]){1, -1});
+      
     }
 
   /* --- 4) Build the user stack with argc/argv --- */
@@ -115,6 +167,9 @@ start_process (void *file_name_) // file_name_ = "echo foo bar" 의 주소값
 
   /* --- 5) Clean up and transfer to user mode --- */
   palloc_free_page (file_name);
+  // 지금까지 커널이 쌓아둔 사용자 context(intr_frame)를 stack pointer에 넣고, 
+  // 곧바로 intr_exit로 점프해서 사용자 모드로 복귀(invoke iret)하도록 해주는 역할
+
   asm volatile ("movl %0, %%esp; jmp intr_exit"
                 : : "g" (&if_) : "memory");
 
@@ -131,7 +186,7 @@ setup_user_stack (void **esp, char **argv, int argc)
   /* 1) Push each argument string bytes onto the stack (in reverse). */
   for (i = argc - 1; i >= 0; i--) 
     {
-      size_t len = strlen (argv[i]) + 1;
+      size_t len = strlen (argv[i]) + 1; // null도 포함
       *esp = (uint8_t *) *esp - len;
       memcpy (*esp, argv[i], len);
       arg_addrs[i] = *esp;
@@ -169,6 +224,11 @@ setup_user_stack (void **esp, char **argv, int argc)
   /* 7) Push fake return address. */
   *esp = (uint8_t *) *esp - sizeof (void *);
   memset (*esp, 0, sizeof (void *));
+
+  // hex_dump ((uintptr_t) *esp,       /* starting virtual address of the dump */
+  //         *esp,                   /* pointer to the buffer to dump */
+  //         PHYS_BASE - (uintptr_t) *esp,  /* size: from new esp up to PHYS_BASE */
+  //         true);                  /* print ASCII on the right */
 }
 
 /* Waits for thread TID to die and returns its exit status.  If
@@ -183,8 +243,53 @@ setup_user_stack (void **esp, char **argv, int argc)
 int
 process_wait (tid_t child_tid) 
 {
-  
-  return -1;
+    volatile struct thread *cur = thread_current (); // main_thread
+    struct list_elem *e;
+    struct thread *child = NULL;
+    int status;
+    int idx = 0;
+
+    //printf("[DBG process_wait] ENTER: child_tid=%d, children empty? %d\n", child_tid, list_empty(&cur->children));
+
+    /* 1) 내 children 리스트에서 child_tid에 해당하는 자식 탐색 */
+    for (e = list_begin (&cur->children); e != list_end (&cur->children); e = list_next (e), idx++) 
+    {
+        volatile struct thread *t = list_entry (e, struct thread, child_elem);
+        //printf("[DBG process_wait]  child[%d]: tid=%d, name=%s, waited=%d\n", idx, t->tid, t->name, t->waited);
+        if (t->tid == child_tid)
+        {
+            child = t;
+            //printf("[DBG process_wait]   -> matched child[%d]\n", idx);
+            break;
+        }
+    }
+
+    //printf("[DBG process_wait] loop exited after %d iterations\n", idx);
+
+    /* 2) 자식이 아니거나 이미 wait()된 경우 즉시 실패 */
+    if (child == NULL || child->waited) {
+      //printf("[DBG process_wait] FAIL: child==%p waited=%d\n", child, child ? child->waited : -1);
+      return -1;
+    }
+    /* 3) 자식의 exit() 신호 대기 */
+   // printf("[DEBUG] process_wait: before sema_down (waiting for exit)\n");
+    sema_down(&child->exit_sema);
+    //printf("[DEBUG] process_wait -> after sema_down (&child->exit_sema);\n");
+
+    /* 4) 종료 상태 수집 및 중복 대기 금지 표시 */
+    status = child->exit_status;
+    child->waited = true;
+
+    //printf("[DEBUG] process_wait: before sema_up(&child->can_destroy);\n");
+    sema_up(&child->can_destroy);
+   // printf("[DEBUG] process_wait: after sema_up(&child->can_destroy);\n");
+
+    /* 5) 리스트에서 제거 */
+    list_remove (&child->child_elem);
+
+    /* 6) 부모에게 상태 반환 */
+   // printf("[DBG process_wait] EXIT: returning status=%d\n", status);
+    return status;
 }
 
 
@@ -196,7 +301,15 @@ process_exit (int status)
   uint32_t *pd;
 
   /* Print exit status just before tearing down */
-  printf ("%s: exit(%d)\n", thread_name(), status);
+  // kernel thread가 terminate되거나 halt syscall이 호출된 경우에는 출력하면 안 된다
+  // printf ("%s: exit(%d)\n", thread_name(), status);
+
+  for (int fd = 2; fd < FDCOUNT_LIMIT; fd++) // exiting or terminating a process implicitly closes all its open file descriptors
+    if (cur->fd_table[fd] != NULL)
+        process_close_file(fd);
+
+  //printf("close-executable\n");
+  //printf((cur->executable));
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -265,9 +378,11 @@ process_close_file (int fd)
   struct thread *cur = thread_current ();
   if (fd < 2 || fd >= FDCOUNT_LIMIT)
     return false;
+
   struct file *f = cur->fd_table[fd];
   if (f == NULL)
     return false;
+    
   file_close (f);
   cur->fd_table[fd] = NULL;
   return true;
@@ -414,7 +529,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
             {
               bool writable = (phdr.p_flags & PF_W) != 0;
               uint32_t file_page = phdr.p_offset & ~PGMASK;
-              uint32_t mem_page = phdr.p_vaddr & ~PGMASK; // <---- PGMASK에 덮여서 중복이 발생?
+              uint32_t mem_page = phdr.p_vaddr & ~PGMASK; // <---- PGMASK에 덮여서 중복이 발생? 
               uint32_t page_offset = phdr.p_vaddr & PGMASK;
               uint32_t read_bytes, zero_bytes;
               if (phdr.p_filesz > 0)
@@ -453,7 +568,18 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
+  // file_close (file); 
+  // close는 file_allow_write를 호출하기 때문에 deny_write를 정상적으로 동작시키려면 넣으면 안 됨
+  // 공식문서에도 you must keep it open as long as the process is still running 이라고 명시 되어 있음
+  // 내가 임의로 file_close를 지운것이기 때문에 process_exit에서 file_close를 호출하려고 한다. 그러면 공식문서에 부합한다고 판단
+
+  //printf("load done\n");
+
+  if (success) {
+    file_deny_write(file);
+    thread_current()->executable = file;
+  }
+
   return success;
 }
 
@@ -550,20 +676,12 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       /* Zero the remainder. */
       memset (kpage + page_read_bytes, 0, page_zero_bytes);
 
-      /* If UPAGE is already mapped, just discard kpage. */
-      if (pagedir_get_page (thread_current ()->pagedir, upage) != NULL)
-        {
-          palloc_free_page (kpage);
-        }
-      else
-        {
-          /* Otherwise install it. */
-          if (!install_page (upage, kpage, writable))
-            {
-              palloc_free_page (kpage);
-              return false;
-            }
-        }
+      /* Add the page to the process's address space. */
+      if (!install_page (upage, kpage, writable)) // <---- 문제
+      {
+        palloc_free_page (kpage);
+        return false; 
+      }
 
       /* Advance to next page in segment. */
       read_bytes -= page_read_bytes;

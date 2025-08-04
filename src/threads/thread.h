@@ -6,6 +6,9 @@
 #include <stdint.h>
 #include "filesys/file.h"   /* for struct file */
 
+
+#include "threads/synch.h"    /* for struct semaphore */
+
 /* States in a thread's life cycle. */
 enum thread_status
   {
@@ -136,12 +139,30 @@ struct thread
 
     /* Exit code supplied by the process via the exit() syscall. */
     int exit_status;
+
+    /* 실행 파일에 대한 deny-write 잠금용 포인터 */ 
+    struct file *executable;     
+    
+    /* 부모·자식 관계 및 동기화용 필드 */
+    struct thread *parent;         /* 이 스레드를 생성한 부모 스레드 포인터 */
+    struct list children;          /* 내가 만든 자식 스레드의 리스트(head) */
+    struct list_elem child_elem;   /* 부모의 children 리스트에서 사용하는 링크 */
+    struct semaphore load_sema;    /* exec() 후 자식 로드 완료 대기용 */
+    struct semaphore exit_sema;    /* wait()에서 자식 종료 대기용 */
+    struct semaphore can_destroy;  /* 부모가 수거 후 자식 파괴 허용용 */
+    bool load_success;             /* load() 성공 여부 */
+    bool waited;                   /* 이미 wait()된 자식인지 표시 | 한 자식에 대해 wait()를 한 번만 허용하기 위해 필요 */
+    
     
 #endif
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };
+
+
+struct thread *get_thread_by_tid(tid_t tid);
+
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.

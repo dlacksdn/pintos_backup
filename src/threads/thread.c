@@ -62,8 +62,6 @@ static unsigned thread_ticks;   /* # of timer ticks since last yield. */
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
 bool thread_mlfqs;
-
-struct thread *get_thread_by_tid(tid_t tid);
 static int next_thread_tickets = 1;
 static int min_pass_num = 0;
 
@@ -381,7 +379,12 @@ thread_tid (void)
 void
 thread_exit (void) 
 {
+  struct thread *cur = thread_current ();
+
   ASSERT (!intr_context ());
+  //printf("thread_exit\n");
+
+
 
 #ifdef USERPROG
   process_exit (thread_current()->exit_status);
@@ -680,6 +683,20 @@ idle (void *idle_started_ UNUSED)
     }
 }
 
+struct thread *
+get_thread_by_tid (tid_t tid) 
+{
+  struct list_elem *e;
+  for (e = list_begin (&all_list); e != list_end (&all_list);
+       e = list_next (e))
+    {
+      struct thread *t = list_entry (e, struct thread, allelem);
+      if (t->tid == tid)
+        return t;
+    }
+  return NULL;
+}
+
 /* Function used as the basis for a kernel thread. */
 static void
 kernel_thread (thread_func *function, void *aux) 
@@ -749,6 +766,16 @@ init_thread (struct thread *t, const char *name, int priority)
     t->fd_table[i] = NULL;
   t->next_fd = 2;            /* 0 and 1 are console */
   t->exit_status = 0;
+  t->executable = NULL;  
+
+  t->parent = NULL;
+  list_init (&t->children);
+  sema_init (&t->load_sema, 0);
+  sema_init (&t->exit_sema, 0);
+  sema_init (&t->can_destroy, 0);
+  t->load_success = false;
+  t->waited = false;
+
   #endif
   
 

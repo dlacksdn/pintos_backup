@@ -29,119 +29,349 @@ syscall_init (void)
 static void
 syscall_handler (struct intr_frame *f) 
 {
-  printf("in SYS_WRITE_test1\n");
+  check_address_buffer(f->esp, sizeof(int));
+
   int *uargs = (int *) f->esp;
   if (!is_user_vaddr (uargs))
     process_exit (-1);
 
   switch (uargs[0]) 
     {
-      case SYS_EXIT:
-        process_exit (uargs[1]);
+      case SYS_CREATE:
+        check_address_buffer(uargs, 3 * sizeof(int)); // 각 인자가 유효한 사용자 영역에 있는지 
+        syscall_create (f, uargs);
         break;
 
-      case SYS_WRITE:
-        {
-          printf("in SYS_WRITE_test1\n");
-          int fd    = uargs[1];
-          void *buf = (void *) uargs[2];
-          unsigned sz = (unsigned) uargs[3];
-
-          
-
-          if (!is_user_vaddr (buf) ||
-              !is_user_vaddr ((uint8_t *)buf + sz - 1))
-            {
-              f->eax = -1;
-              break;
-            }
-
-          if (fd == STDOUT_FILENO) 
-            {
-              /* Console writes—no lock needed for console itself. */
-              putbuf (buf, sz);
-              f->eax = sz;
-            }
-          else 
-            {
-              /* Any real file access must be serialized. */
-              lock_acquire (&fs_lock);
-              struct file *file = process_get_file (fd);
-              if (file != NULL)
-                f->eax = file_write (file, buf, sz);
-              else
-                f->eax = -1;
-              lock_release (&fs_lock);
-            }
-        }
+      case SYS_REMOVE:
+        check_address_buffer(uargs, 2 * sizeof(int));
+        syscall_remove (f, uargs);
         break;
-
+      
       case SYS_OPEN:
-        {
-          const char *fn = (const char *) uargs[1];
-          if (!is_user_vaddr (fn))
-            { f->eax = -1; break; }
-
-          lock_acquire (&fs_lock);
-          struct file *file = filesys_open (fn);
-          if (file == NULL)
-            f->eax = -1;
-          else
-            {
-              int fd = process_add_file (file);
-              f->eax = fd;
-            }
-          lock_release (&fs_lock);
-        }
+        check_address_buffer(uargs, 2 * sizeof(int));
+        syscall_open (f, uargs);
         break;
 
       case SYS_READ:
-        {
-          int fd    = uargs[1];
-          void *buf = (void *) uargs[2];
-          unsigned sz = (unsigned) uargs[3];
+        check_address_buffer(uargs, 4 * sizeof(int));
+        syscall_read (f, uargs);
+        break;
 
-          if (!is_user_vaddr (buf) ||
-              !is_user_vaddr ((uint8_t *)buf + sz - 1))
-            { f->eax = -1; break; }
+      case SYS_WRITE:
+        check_address_buffer(uargs, 4 * sizeof(int));
+        syscall_write (f, uargs);
+        break;
 
-          if (fd == STDIN_FILENO)
-            {
-              /* Keyboard input—no fs lock. */
-              int i;
-              for (i = 0; i < (int)sz; i++)
-                ((char *)buf)[i] = input_getc ();
-              f->eax = sz;
-            }
-          else
-            {
-              lock_acquire (&fs_lock);
-              struct file *file = process_get_file (fd);
-              if (file != NULL)
-                f->eax = file_read (file, buf, sz);
-              else
-                f->eax = -1;
-              lock_release (&fs_lock);
-            }
-        }
+      case SYS_FILESIZE:
+        check_address_buffer(uargs, 2 * sizeof(int));
+        syscall_filesize (f, uargs);
+        break;
+
+      case SYS_SEEK:
+        check_address_buffer(uargs, 3 * sizeof(int));
+        syscall_seek (f, uargs);
+        break;
+
+      case SYS_TELL:
+        check_address_buffer(uargs, 2 * sizeof(int));
+        syscall_tell (f, uargs);
         break;
 
       case SYS_CLOSE:
-        {
-          int fd = uargs[1];
-          lock_acquire (&fs_lock);
-          if (process_close_file (fd))
-            f->eax = 0;
-          else
-            f->eax = -1;
-          lock_release (&fs_lock);
-        }
+        check_address_buffer(uargs, 2 * sizeof(int));
+        syscall_close (f, uargs);
         break;
 
-      /* … other syscalls (filesize, seek, tell, remove…) all go here,
-         each wrapped by lock_acquire/lock_release around filesys_* calls. */
+      case SYS_EXIT:
+        check_address_buffer(uargs, 2 * sizeof(int));
+        syscall_exit (f, uargs);
+        break;
+
+      case SYS_EXEC:
+        check_address_buffer(uargs, 2 * sizeof(int));
+        syscall_exec (f, uargs);
+        break;
+
+      case SYS_HALT:
+        syscall_halt ();
+        break;
+
+      case SYS_WAIT:
+        check_address_buffer(uargs, 2 * sizeof(int));
+        syscall_wait (f, uargs);
+        break;
 
       default:
-        process_exit (-1);
+        syscall_exit(NULL, (int[]){SYS_EXIT, -1});
     }
 }
+
+// null pointer | virtual memory와 mapping되지 않은 pointer | kernel virtual address에 있는 pointer (PHYS_BASE 위) 를 막는 함수
+void
+check_address_buffer(const void *addr, size_t size) 
+{
+  uint8_t *start = (uint8_t *) addr;
+  for (size_t i = 0; i < size; i++) {
+    void *check = start + i;
+    if (check == NULL || !is_user_vaddr(check) ||
+        pagedir_get_page(thread_current()->pagedir, check) == NULL) {
+
+        /* 비정상 종료 경로도 syscall_exit()을 통해 부모 깨우도록 */
+        syscall_exit(NULL, (int[]){SYS_EXIT, -1});
+    }
+  }
+}
+
+void
+check_address_file(const char *addr)
+{
+  while (true) 
+    {
+      /* 1) 널 체크, user 영역 체크, 매핑 체크 */
+      if (addr == NULL
+          || !is_user_vaddr (addr)
+          || pagedir_get_page (thread_current ()->pagedir, addr) == NULL) {
+
+            /* syscall_exit() 호출로 부모도 wake up */
+            syscall_exit(NULL, (int[]){SYS_EXIT, -1});
+          }
+
+      /* 2) 널 문자 만나면 성공적으로 끝 */
+      if (*addr == '\0')
+        return;
+
+      /* 3) 다음 문자 검사 */
+      addr++;
+    }
+}
+
+/* 1. bool create(const char *file, unsigned initial_size) */
+void 
+syscall_create(struct intr_frame *f, int *uargs) 
+{
+  const char *file = (const char *) uargs[1];
+  check_address_file(file);  
+
+  unsigned initial_size = uargs[2];
+  f->eax = filesys_create(file, initial_size);
+}
+
+/* 2. bool remove(const char *file) */
+// 여기서 file이라 함은 file 이름을 말하는 것 같다
+void 
+syscall_remove(struct intr_frame *f, int *uargs) 
+{
+    const char *file = (const char *) uargs[1];
+    check_address_file(file);
+    
+    f->eax = filesys_remove(file);
+}
+
+// int open (const char *file)
+// 성공하면 fd, 실패하면 -1을 리턴 -> 이걸 eax로 한다
+void
+syscall_open (struct intr_frame *f, int *uargs)
+{
+  const char *fn = (const char *) uargs[1];
+  check_address_file(fn);
+
+  lock_acquire (&fs_lock);
+  struct file *file = filesys_open (fn);
+  if (file == NULL)
+    f->eax = -1;
+  else
+    f->eax = process_add_file (file); // fd 인덱스를 리턴
+  lock_release (&fs_lock);
+}
+
+// int read (int fd, void *buffer, unsigned size)
+// 성공 : 실제 읽은 byte 수 리턴 (EOF면 0도 가능) | 실패 : -1 리턴 (EOF제외한 다른 이유로 인해 읽지 못한 경우)
+void
+syscall_read (struct intr_frame *f, int *uargs)
+{
+  int    fd  = uargs[1];
+  void  *buf = (void *) uargs[2];
+  unsigned sz = (unsigned) uargs[3];
+
+  // file이 아니라 buffer이기 때문에 null이 없어서 +1을 하지 않는다
+  check_address_buffer(buf, sz);
+
+  if (fd == STDIN_FILENO) { // 파일시스템이 아니라 콘솔 장치(키보드)에서 직접 가져온다
+    for (int i = 0; i < (int) sz; i++)
+      ((char *) buf)[i] = input_getc ();
+
+    f->eax = sz;
+  }
+  else { 
+      lock_acquire (&fs_lock);
+
+      struct file *file = process_get_file (fd);
+      if (file != NULL)
+        f->eax = file_read (file, buf, sz); // read한 byte수를 리턴
+      else
+        f->eax = -1; // process를 종료시킬 것까지는 없을거라 판단 
+
+      lock_release (&fs_lock);
+  }
+}
+
+// int write (int fd, const void *buffer, unsigned size)
+// 성공 : 실제로 write한 byte 수 (전부 write가 안 되서 size보다 작을 수 있다) (0도 가능)
+void
+syscall_write (struct intr_frame *f, int *uargs)
+{
+  // printf("syscall_write\n");
+  int    fd  = uargs[1];
+  void  *buf = (void *) uargs[2];
+  unsigned sz = (unsigned) uargs[3];
+
+  check_address_buffer(buf, sz); // 이건 아예 주소가 잘못 되서 process를 종료 시키는 것
+
+  if (fd == STDOUT_FILENO) {
+    putbuf (buf, sz);
+    f->eax = sz;
+  }
+  else {
+    lock_acquire (&fs_lock);
+
+    struct file *file = process_get_file (fd);
+    if (file != NULL)
+      f->eax = file_write (file, buf, sz); // write된 byte 수를 리턴
+    else
+      f->eax = -1;
+
+    lock_release (&fs_lock);
+  }
+}
+
+// int filesize (int fd) 
+void
+syscall_filesize (struct intr_frame *f, int *uargs)
+{
+  int fd = uargs[1];
+  struct file *file = process_get_file (fd);
+  if (file == NULL)
+    f->eax = -1; 
+  else
+    f->eax = file_length (file); // inode->data의 length를 잰다
+}
+
+// void seek (int fd, unsigned position) 
+void
+syscall_seek (struct intr_frame *f, int *uargs)
+{
+  int fd = uargs[1];
+  unsigned position = uargs[2];
+  struct file *fp = process_get_file (fd);
+  if (fp != NULL) { // void syscall이라 fp가 NULL일 때는 처리 안 해줘도 된다 (eax로 넘길 필요가 없다)
+    file_seek(fp, position);
+  }
+}
+
+/* 8. unsigned tell(int fd) */
+void 
+syscall_tell(struct intr_frame *f, int *uargs) 
+{
+  int fd = uargs[1];
+  struct file *fp = process_get_file (fd);
+  // if (fp == NULL) {
+  //   f->eax = -1;
+  // }
+  // else 
+    f->eax = file_tell(fp);
+}
+
+// void close (int fd)
+void
+syscall_close (struct intr_frame *f, int *uargs)
+{
+  int fd = uargs[1];
+
+  lock_acquire (&fs_lock);
+  process_close_file (fd);
+  lock_release (&fs_lock);
+
+
+  // lock_acquire (&fs_lock);
+  // if (process_close_file (fd))
+  //   f->eax = 0;
+  // else
+  //   f->eax = -1;
+  // lock_release (&fs_lock);
+}
+
+// void exit (int status)
+void
+syscall_exit (struct intr_frame *f, int *uargs)
+{
+  // printf("syscall_exit\n");
+  int status = uargs[1];
+  struct thread *cur = thread_current (); // echo
+
+  
+  printf ("%s: exit(%d)\n", cur->name, status);
+  
+
+  /* 1) 종료 상태 기록 */
+  cur->exit_status = status;
+
+  /* 실행 파일에 대한 deny-write 해제 및 닫기 */
+  if (cur->executable != NULL) {
+    file_close(cur->executable);
+    cur->executable = NULL;
+  }
+
+  /* 2) 부모의 process_wait() 대기 해제 */
+  //printf("[DEBUG] syscall_exit: before sema_up (exit_status=%d)\n", status);
+  sema_up(&cur->exit_sema);
+  //printf("[DEBUG] syscall_exit -> after sema_up (&cur->exit_sema);\n");
+
+  // printf ("%s: exit(%d)\n", thread_name(), status);
+
+  //printf("[DEBUG] syscall_exit: before sema_down(&cur->can_destroy);\n");
+  sema_down(&cur->can_destroy);
+  //printf("[DEBUG] syscall_exit: after sema_down(&cur->can_destroy);\n");
+
+
+  thread_exit();
+  NOT_REACHED ();
+}
+
+
+// pid_t exec (const char *file)
+// 현재 프로세스를 cmd_line에서 지정된 인수를 전달하여 이름이 지정된 실행 파일로 변경
+void
+syscall_exec (struct intr_frame *f, int *uargs)
+{
+  const char *cmd_line = (const char *) uargs[1];
+  check_address_file(cmd_line);
+  f->eax = process_execute(cmd_line);
+}
+
+// void halt (void) 
+void
+syscall_halt() 
+{
+  shutdown_power_off ();
+}
+
+// int wait (pid_t pid)
+void 
+syscall_wait(struct intr_frame *f, int *uargs)
+{
+  tid_t pid = (tid_t) uargs[1];
+  f->eax = process_wait(pid);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
