@@ -380,9 +380,9 @@ void
 thread_exit (void) 
 {
   struct thread *cur = thread_current ();
+  printf("[DEBUG] thread_exit START : %s\n", cur->name);
 
   ASSERT (!intr_context ());
-  //printf("thread_exit\n");
 
 
 

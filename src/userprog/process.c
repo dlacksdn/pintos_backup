@@ -41,6 +41,7 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 tid_t
 process_execute (const char *cmd_line) 
 {
+  printf("[DEBUG] process_execute START : %s\n", thread_current() -> name);
   char *fn_copy, *thread_name;
   char *save_ptr;
   tid_t tid;
@@ -82,9 +83,9 @@ process_execute (const char *cmd_line)
                   &child->child_elem);
 
   /* 3-4) 자식 load() 완료 신호 대기 */
-  //printf("[DEBUG] process_execute: before sema_down (waiting for load)\n");
+  printf("[DEBUG] process_execute: before sema_down (&child->load_sema); : %s\n", thread_current()->name);
   sema_down(&child->load_sema);
-  //printf("[DEBUG] process_execute -> after sema_down (&child->wait_sema);\n");
+  printf("[DEBUG] process_execute -> after sema_down (&child->load_sema); : %s\n", thread_current()->name);
 
   /* 3-2) 부모–자식 관계 설정을 위해 all_list에서 방금 생성된 child 찾기 */
   
@@ -110,7 +111,7 @@ process_execute (const char *cmd_line)
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy);
 
-  //printf("[DBG process_execute] about to return tid=%d\n", tid);
+  printf("[DEBUG] process_execute END : tid=%d, %s\n", tid, thread_current() -> name);
   return tid;
 }
 
@@ -121,6 +122,7 @@ process_execute (const char *cmd_line)
 static void
 start_process (void *file_name_) // file_name_ = "echo foo bar" 의 주소값
 {
+  printf("[DEBUG] start_process START : %s\n", thread_current()->name);
   char *file_name = file_name_;
   struct intr_frame if_;
   volatile bool success;
@@ -145,19 +147,18 @@ start_process (void *file_name_) // file_name_ = "echo foo bar" 의 주소값
 
   /* --- 3) Load the executable using argv[0] as program name --- */
   success = load (argv[0], &if_.eip, &if_.esp);
-  //printf("[DEBUG] start_process: before sema_up (load_success=%d)\n", success);
 
   /* 3-1) load 결과를 부모에게 알림 */
   volatile struct thread *cur = thread_current (); // echo
   cur->load_success = success;
+  printf("[DEBUG] start_process : sema_up (&cur ()->load_sema); (load_success=%d) : %s\n", success, cur->name);
   sema_up(&cur->load_sema);
-  //printf("[DEBUG] start_process -> after sema_up (&thread_current ()->wait_sema);\n");
+  // printf("[DEBUG] start_process -> after sema_up (&cur ()->load_sema); : %s\n", cur->name);
 
   if (!success) 
     {
       list_remove(&thread_current()->child_elem);
       palloc_free_page (file_name);
-      //sema_up(&child->can_destroy);
       syscall_exit(NULL, (int[]){1, -1});
       
     }
@@ -169,6 +170,9 @@ start_process (void *file_name_) // file_name_ = "echo foo bar" 의 주소값
   palloc_free_page (file_name);
   // 지금까지 커널이 쌓아둔 사용자 context(intr_frame)를 stack pointer에 넣고, 
   // 곧바로 intr_exit로 점프해서 사용자 모드로 복귀(invoke iret)하도록 해주는 역할
+
+  printf("[DEBUG] start_process END : %s\n", cur->name);
+
 
   asm volatile ("movl %0, %%esp; jmp intr_exit"
                 : : "g" (&if_) : "memory");
@@ -244,6 +248,8 @@ int
 process_wait (tid_t child_tid) 
 {
     volatile struct thread *cur = thread_current (); // main_thread
+    printf("[DEBUG] process_wait START : %s\n", cur->name);
+
     struct list_elem *e;
     struct thread *child = NULL;
     int status;
@@ -272,23 +278,24 @@ process_wait (tid_t child_tid)
       return -1;
     }
     /* 3) 자식의 exit() 신호 대기 */
-   // printf("[DEBUG] process_wait: before sema_down (waiting for exit)\n");
+    printf("[DEBUG] process_wait: before sema_down (&child->exit_sema); : %s\n", cur->name);
     sema_down(&child->exit_sema);
-    //printf("[DEBUG] process_wait -> after sema_down (&child->exit_sema);\n");
+    printf("[DEBUG] process_wait -> after sema_down (&child->exit_sema); : %s\n", cur->name);
 
     /* 4) 종료 상태 수집 및 중복 대기 금지 표시 */
     status = child->exit_status;
     child->waited = true;
 
-    //printf("[DEBUG] process_wait: before sema_up(&child->can_destroy);\n");
+    printf("[DEBUG] process_wait: sema_up(&child->can_destroy); : %s\n", cur->name);
     sema_up(&child->can_destroy);
-   // printf("[DEBUG] process_wait: after sema_up(&child->can_destroy);\n");
+    
+    //printf("[DEBUG] process_wait: after sema_up(&child->can_destroy);\n");
 
     /* 5) 리스트에서 제거 */
     list_remove (&child->child_elem);
 
     /* 6) 부모에게 상태 반환 */
-   // printf("[DBG process_wait] EXIT: returning status=%d\n", status);
+    printf("[DEBUG] process_wait END : status=%d, %s\n", status, cur->name);
     return status;
 }
 
@@ -298,8 +305,9 @@ void
 process_exit (int status)
 {
   struct thread *cur = thread_current ();
-  uint32_t *pd;
+  printf("[DEBUG] process_exit START : %s\n", cur->name);
 
+  uint32_t *pd;
   /* Print exit status just before tearing down */
   // kernel thread가 terminate되거나 halt syscall이 호출된 경우에는 출력하면 안 된다
   // printf ("%s: exit(%d)\n", thread_name(), status);
@@ -307,9 +315,6 @@ process_exit (int status)
   for (int fd = 2; fd < FDCOUNT_LIMIT; fd++) // exiting or terminating a process implicitly closes all its open file descriptors
     if (cur->fd_table[fd] != NULL)
         process_close_file(fd);
-
-  //printf("close-executable\n");
-  //printf((cur->executable));
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
