@@ -149,7 +149,7 @@ check_address_file(const char *addr)
 void 
 syscall_create(struct intr_frame *f, int *uargs) 
 {
-  printf("[DEBUG] syscall_create START : %s\n", thread_current()->name);
+  //printf("[DEBUG] syscall_create START : %s\n", thread_current()->name);
   const char *file = (const char *) uargs[1];
   check_address_file(file);  
 
@@ -162,7 +162,7 @@ syscall_create(struct intr_frame *f, int *uargs)
 void 
 syscall_remove(struct intr_frame *f, int *uargs) 
 {
-  printf("[DEBUG] syscall_remove START : %s\n", thread_current()->name);
+  //printf("[DEBUG] syscall_remove START : %s\n", thread_current()->name);
  
   const char *file = (const char *) uargs[1];
   check_address_file(file);
@@ -175,7 +175,7 @@ syscall_remove(struct intr_frame *f, int *uargs)
 void
 syscall_open (struct intr_frame *f, int *uargs)
 {
-  printf("[DEBUG] syscall_open START : %s\n", thread_current()->name);
+  //printf("[DEBUG] syscall_open START : %s\n", thread_current()->name);
 
   const char *fn = (const char *) uargs[1];
   check_address_file(fn);
@@ -194,7 +194,7 @@ syscall_open (struct intr_frame *f, int *uargs)
 void
 syscall_read (struct intr_frame *f, int *uargs)
 {
-  printf("[DEBUG] syscall_read START : %s\n", thread_current()->name);
+  //printf("[DEBUG] syscall_read START : %s\n", thread_current()->name);
 
   int    fd  = uargs[1];
   void  *buf = (void *) uargs[2];
@@ -227,7 +227,7 @@ syscall_read (struct intr_frame *f, int *uargs)
 void
 syscall_write (struct intr_frame *f, int *uargs)
 {
-  printf("[DEBUG] syscall_write START : %s\n", thread_current()->name);
+  //printf("[DEBUG] syscall_write START : %s\n", thread_current()->name);
 
   int    fd  = uargs[1];
   void  *buf = (void *) uargs[2];
@@ -256,7 +256,7 @@ syscall_write (struct intr_frame *f, int *uargs)
 void
 syscall_filesize (struct intr_frame *f, int *uargs)
 {
-  printf("[DEBUG] syscall_filesize START : %s\n", thread_current()->name);
+  //printf("[DEBUG] syscall_filesize START : %s\n", thread_current()->name);
   int fd = uargs[1];
   struct file *file = process_get_file (fd);
   if (file == NULL)
@@ -269,7 +269,7 @@ syscall_filesize (struct intr_frame *f, int *uargs)
 void
 syscall_seek (struct intr_frame *f, int *uargs)
 {
-  printf("[DEBUG] syscall_seek START : %s\n", thread_current()->name);
+  //printf("[DEBUG] syscall_seek START : %s\n", thread_current()->name);
   int fd = uargs[1];
   unsigned position = uargs[2];
   struct file *fp = process_get_file (fd);
@@ -282,7 +282,7 @@ syscall_seek (struct intr_frame *f, int *uargs)
 void 
 syscall_tell(struct intr_frame *f, int *uargs) 
 {
-  printf("[DEBUG] syscall_tell START : %s\n", thread_current()->name);
+ // printf("[DEBUG] syscall_tell START : %s\n", thread_current()->name);
   int fd = uargs[1];
   struct file *fp = process_get_file (fd);
   f->eax = file_tell(fp);
@@ -292,7 +292,7 @@ syscall_tell(struct intr_frame *f, int *uargs)
 void
 syscall_close (struct intr_frame *f, int *uargs)
 {
-  printf("[DEBUG] syscall_close START : %s\n", thread_current()->name);
+  //printf("[DEBUG] syscall_close START : %s\n", thread_current()->name);
   int fd = uargs[1];
 
   lock_acquire (&fs_lock);
@@ -306,7 +306,7 @@ syscall_exit (struct intr_frame *f, int *uargs)
 {
   int status = uargs[1];
   struct thread *cur = thread_current (); // echo
-  printf("[DEBUG] syscall_exit START : %s\n", cur->name);
+  //printf("[DEBUG] syscall_exit START : %s\n", cur->name);
 
   
   printf ("%s: exit(%d)\n", cur->name, status);
@@ -322,20 +322,20 @@ syscall_exit (struct intr_frame *f, int *uargs)
   }
 
   /* 2) 부모의 process_wait() 대기 해제 */
-  printf("[DEBUG] syscall_exit : sema_up (exit_status=%d) : %s\n", status, cur->name);
+ // printf("[DEBUG] syscall_exit : sema_up (exit_status=%d) : %s\n", status, cur->name);
   sema_up(&cur->exit_sema);
   // printf("[DEBUG] syscall_exit -> after sema_up (&cur->exit_sema);\n");
 
-  printf("[DEBUG] syscall_exit: before sema_down(&cur->can_destroy); : %s\n", cur->name);
+  //printf("[DEBUG] syscall_exit: before sema_down(&cur->can_destroy); : %s\n", cur->name);
   sema_down(&cur->can_destroy);
-  printf("[DEBUG] syscall_exit: after sema_down(&cur->can_destroy); : %s\n", cur->name);
+ // printf("[DEBUG] syscall_exit: after sema_down(&cur->can_destroy); : %s\n", cur->name);
 
   
 
   // printf ("%s: exit(%d)\n", thread_name(), status);
 
 
-  printf("[DEBUG] syscall_exit END : %s\n", cur->name);
+  //printf("[DEBUG] syscall_exit END : %s\n", cur->name);
   thread_exit();
   NOT_REACHED ();
 }
@@ -346,18 +346,18 @@ syscall_exit (struct intr_frame *f, int *uargs)
 void
 syscall_exec (struct intr_frame *f, int *uargs)
 {
-  printf("[DEBUG] syscall_exec START : %s\n", thread_current()->name);
+  //printf("[DEBUG] syscall_exec START : %s\n", thread_current()->name);
   const char *cmd_line = (const char *) uargs[1];
   check_address_file(cmd_line);
   f->eax = process_execute(cmd_line);
-  printf("[DEBUG] syscall_exec END : %s\n", thread_current()->name);
+  //printf("[DEBUG] syscall_exec END : %s\n", thread_current()->name);
 }
 
 // void halt (void) 
 void
 syscall_halt() 
 {
-  printf("[DEBUG] syscall_halt START : %s\n", thread_current()->name);
+  //printf("[DEBUG] syscall_halt START : %s\n", thread_current()->name);
   shutdown_power_off ();
 }
 
@@ -365,10 +365,10 @@ syscall_halt()
 void 
 syscall_wait(struct intr_frame *f, int *uargs)
 {
-  printf("[DEBUG] syscall_wait START : %s\n", thread_current()->name);
+  //printf("[DEBUG] syscall_wait START : %s\n", thread_current()->name);
   tid_t pid = (tid_t) uargs[1];
   f->eax = process_wait(pid);
-  printf("[DEBUG] syscall_wait END : %s\n", thread_current()->name);
+ // printf("[DEBUG] syscall_wait END : %s\n", thread_current()->name);
 }
 
 
